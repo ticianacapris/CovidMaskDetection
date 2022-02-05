@@ -12,6 +12,70 @@ import imutils
 import time
 import cv2
 import os
+import RPi.GPIO as GPIO
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import db
+import random
+import string
+from datetime import datetime
+from flask import Flask, session
+
+cred_object =  credentials.Certificate('isicovid-2c508-firebase-adminsdk-vgv1d-dbe1553275.json')
+databaseURL = 'https://isicovid-2c508-default-rtdb.firebaseio.com/'
+default_app = firebase_admin.initialize_app(cred_object, {
+	'databaseURL':databaseURL
+	})
+ref = db.reference("/covid_data")
+
+def firebase(mask, alcohol):
+  #a cada execução inserir apenas uma pessoa por cada uma 
+  output_string = ''.join(random.SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(10))
+  last_record = ref.order_by_key().limit_to_last(1).get()
+  count = 0
+  count_alcohol = 0
+  
+  for key, value in last_record.items(): 
+    new_value = int(value['mask_count']) + 1
+    count = new_value
+    new_value_alcohol = int(value['mask_alcohol']) + 1
+    count_alcohol = new_value_alcohol
+  
+    data = {
+      "person": "Person" + output_string,
+      "mask": str(mask),
+      "alcohol": str(alcohol),
+      "mask_count": str(count),
+      "mask_alcohol": str(count_alcohol),
+      "created_at": str(datetime.now())
+    }
+  
+    if session['user'] != 'true':
+      ref.push().set(data)
+      session['user']= 'true'
+    else:
+      ref.set(data)
+
+def open_door():
+  print("Mask")
+  GPIO.setmode(GPIO.BOARD)
+  GPIO.setup(11,GPIO.OUT)
+  servo1 = GPIO.PWM(11,50) 
+  servo1.start(0)
+  time.sleep(2)
+
+  servo1.ChangeDutyCycle(1)
+  time.sleep(1)
+
+def verify_door(value):
+  input = GPIO.input(22)
+  if input == 0:
+    value1 = 1
+    open_door()
+    firebase(value, value1)
+  else:
+    print("Not Mask") 
+
 
 def detect_and_predict_mask(frame, faceNet, maskNet):
 	# grab the dimensions of the frame and then construct a blob
@@ -19,6 +83,7 @@ def detect_and_predict_mask(frame, faceNet, maskNet):
 	(h, w) = frame.shape[:2]
 	blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300),
 		(104.0, 177.0, 123.0))
+  
 
 	# pass the blob through the network and obtain the face detections
 	faceNet.setInput(blob)
@@ -102,6 +167,9 @@ maskNet = load_model(args["model"])
 print("[INFO] starting video stream...")
 vs = VideoStream(src=0).start()
 time.sleep(2.0)
+GPIO.setmode(GPIO.BOARD)
+GPIO.setup(22,GPIO.IN)
+
 
 # loop over the frames from the video stream
 while True:
@@ -125,7 +193,9 @@ while True:
 		# the bounding box and text
 		label = "Mask" if mask > withoutMask else "No Mask"
 		color = (0, 255, 0) if label == "Mask" else (0, 0, 255)
-			
+
+		if mask > withoutMask : verify_door(mask)
+    
 		# include the probability in the label
 		label = "{}: {:.2f}%".format(label, max(mask, withoutMask) * 100)
 
